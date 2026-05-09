@@ -1,0 +1,21 @@
+{
+  "name": "oglasino-router",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker that routes oglasino.com traffic to Vercel/API/maintenance",
+  "scripts": {
+    "dev:stage": "wrangler dev --env stage",
+    "dev:production": "wrangler dev --env production",
+    "deploy:stage": "wrangler deploy --env stage",
+    "deploy:production": "wrangler deploy --env production",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240502.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
+    "wrangler": "^4.0.0"
+  }
+}

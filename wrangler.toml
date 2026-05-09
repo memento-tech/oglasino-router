@@ -1,0 +1,69 @@
+# Top-level config doubles as the stage defaults: `wrangler deploy` with no
+# --env flag deploys to the stage Worker, never production. This is a
+# safety property — the only way to ship to production is `wrangler deploy
+# --env production` (or merging to main, which the deploy workflow handles).
+#
+# Routes for oglasino.com / api.oglasino.com / www.oglasino.com (and stage
+# equivalents) are configured via Cloudflare Dashboard → Workers & Pages →
+# [worker] → Triggers → Custom Domains, NOT in this file. Same convention
+# as oglasino-image-worker.
+
+name = "oglasino-router-stage"
+main = "src/index.ts"
+compatibility_date = "2025-09-06"
+
+account_id = ""  # FILL IN: Igor's Cloudflare account ID
+
+[vars]
+FRONTEND_ORIGIN = "https://oglasino-web-stage.vercel.app"  # placeholder until Phase 1E (Vercel stage setup)
+BACKEND_ORIGIN = "https://api-origin-stage.oglasino.com"
+MAINTENANCE_ORIGIN = "https://oglasino-maintenance.pages.dev"
+APEX_HOST = "stage.oglasino.com"
+WWW_HOST = ""
+API_HOST = "api-stage.oglasino.com"
+ENVIRONMENT = "stage"
+
+[[kv_namespaces]]
+binding = "CONFIG"
+id = ""  # FILL IN: stage KV namespace id (create with `wrangler kv namespace create CONFIG --env stage`)
+
+# ---------------------------------------------------------------------------
+# Stage — explicit, identical to default. Allows `wrangler deploy --env
+# stage` for symmetry with `--env production` and with the npm scripts.
+# Wrangler does not inherit complex types (vars, bindings) into env blocks,
+# so they must be repeated here.
+# ---------------------------------------------------------------------------
+[env.stage]
+name = "oglasino-router-stage"
+
+[env.stage.vars]
+FRONTEND_ORIGIN = "https://oglasino-web-stage.vercel.app"  # placeholder until Phase 1E
+BACKEND_ORIGIN = "https://api-origin-stage.oglasino.com"
+MAINTENANCE_ORIGIN = "https://oglasino-maintenance.pages.dev"
+APEX_HOST = "stage.oglasino.com"
+WWW_HOST = ""
+API_HOST = "api-stage.oglasino.com"
+ENVIRONMENT = "stage"
+
+[[env.stage.kv_namespaces]]
+binding = "CONFIG"
+id = ""  # FILL IN: stage KV namespace id (same as top-level)
+
+# ---------------------------------------------------------------------------
+# Production
+# ---------------------------------------------------------------------------
+[env.production]
+name = "oglasino-router-prod"
+
+[env.production.vars]
+FRONTEND_ORIGIN = "https://oglasino-web.vercel.app"
+BACKEND_ORIGIN = "https://api-origin.oglasino.com"
+MAINTENANCE_ORIGIN = "https://oglasino-maintenance.pages.dev"
+APEX_HOST = "oglasino.com"
+WWW_HOST = "www.oglasino.com"
+API_HOST = "api.oglasino.com"
+ENVIRONMENT = "production"
+
+[[env.production.kv_namespaces]]
+binding = "CONFIG"
+id = ""  # FILL IN: existing prod KV namespace id (used by current dashboard-edited Worker)
