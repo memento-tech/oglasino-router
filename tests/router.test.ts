@@ -8,7 +8,7 @@ const ctx = {
 
 function makeKv(
   values: Record<string, string | null> = {},
-  opts: { throwForKey?: string } = {},
+  opts: { throwForKey?: string } = {}
 ): KVNamespace {
   return {
     get: vi.fn(async (key: string) => {
@@ -26,11 +26,11 @@ function makeKv(
 
 function prodEnv(
   kvValues: Record<string, string | null> = {},
-  kvOpts: { throwForKey?: string } = {},
+  kvOpts: { throwForKey?: string } = {}
 ): Env {
   return {
     CONFIG: makeKv(kvValues, kvOpts),
-    FRONTEND_ORIGIN: "https://oglasino-web.vercel.app",
+    FRONTEND_ORIGIN: "https://oglasino-web-prod.vercel.app",
     BACKEND_ORIGIN: "https://api-origin.oglasino.com",
     MAINTENANCE_ORIGIN: "https://oglasino-maintenance.pages.dev",
     APEX_HOST: "oglasino.com",
@@ -72,7 +72,7 @@ describe("router", () => {
     const res = await worker.fetch(req, env, ctx);
     expect(res.status).toBe(301);
     expect(res.headers.get("Location")).toBe(
-      "https://oglasino.com/foo/bar?q=1",
+      "https://oglasino.com/foo/bar?q=1"
     );
   });
 
@@ -93,7 +93,7 @@ describe("router", () => {
   it("admin path bypasses maintenance and forwards to backend", async () => {
     const env = prodEnv({ "maintenance.active": "true" });
     const fetchMock = vi.fn(
-      async (_input: unknown) => new Response("ok", { status: 200 }),
+      async (_input: unknown) => new Response("ok", { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://api.oglasino.com/admin/things");
@@ -101,7 +101,7 @@ describe("router", () => {
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
-      "https://api-origin.oglasino.com/admin/things",
+      "https://api-origin.oglasino.com/admin/things"
     );
   });
 
@@ -126,7 +126,7 @@ describe("router", () => {
         new Response("<html>maint</html>", {
           status: 200,
           headers: { "Content-Type": "text/html" },
-        }),
+        })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://oglasino.com/foo?x=1");
@@ -136,35 +136,35 @@ describe("router", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
-      "https://oglasino-maintenance.pages.dev/foo?x=1",
+      "https://oglasino-maintenance.pages.dev/foo?x=1"
     );
   });
 
   it("maintenance flag false: API forwards to BACKEND_ORIGIN", async () => {
     const env = prodEnv();
     const fetchMock = vi.fn(
-      async (_input: unknown) => new Response("hello", { status: 200 }),
+      async (_input: unknown) => new Response("hello", { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://api.oglasino.com/v1/things");
     const res = await worker.fetch(req, env, ctx);
     expect(res.status).toBe(200);
     expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
-      "https://api-origin.oglasino.com/v1/things",
+      "https://api-origin.oglasino.com/v1/things"
     );
   });
 
   it("maintenance flag false: frontend forwards to FRONTEND_ORIGIN", async () => {
     const env = prodEnv();
     const fetchMock = vi.fn(
-      async (_input: unknown) => new Response("<html/>", { status: 200 }),
+      async (_input: unknown) => new Response("<html/>", { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://oglasino.com/page?x=1");
     const res = await worker.fetch(req, env, ctx);
     expect(res.status).toBe(200);
     expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
-      "https://oglasino-web.vercel.app/page?x=1",
+      "https://oglasino-web-prod.vercel.app/page?x=1"
     );
   });
 
@@ -198,14 +198,14 @@ describe("router", () => {
   it("KV read failure: maintenance fails open (normal routing)", async () => {
     const env = prodEnv({}, { throwForKey: "maintenance.active" });
     const fetchMock = vi.fn(
-      async (_input: unknown) => new Response("ok", { status: 200 }),
+      async (_input: unknown) => new Response("ok", { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://oglasino.com/");
     const res = await worker.fetch(req, env, ctx);
     expect(res.status).toBe(200);
     expect(urlOf(fetchMock.mock.calls[0][0])).toContain(
-      "oglasino-web.vercel.app",
+      "oglasino-web-prod.vercel.app"
     );
   });
 
@@ -216,20 +216,20 @@ describe("router", () => {
         new Response("ok", {
           status: 200,
           headers: { "Content-Type": "text/plain" },
-        }),
+        })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://stage.oglasino.com/");
     const res = await worker.fetch(req, env, ctx);
     expect(res.headers.get("X-Robots-Tag")).toBe(
-      "noindex, nofollow, noarchive, nosnippet",
+      "noindex, nofollow, noarchive, nosnippet"
     );
   });
 
   it("noindex header NOT added for production hosts", async () => {
     const env = prodEnv();
     const fetchMock = vi.fn(
-      async (_input: unknown) => new Response("ok", { status: 200 }),
+      async (_input: unknown) => new Response("ok", { status: 200 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const req = new Request("https://oglasino.com/");
