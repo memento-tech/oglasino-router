@@ -12,7 +12,7 @@ name = "oglasino-router-stage"
 main = "src/index.ts"
 compatibility_date = "2025-09-06"
 
-account_id = ""  # FILL IN: Igor's Cloudflare account ID
+account_id = "87ccdd5b46d280541d805f80915fa299"
 
 [vars]
 FRONTEND_ORIGIN = "https://oglasino-web-stage.vercel.app"  # placeholder until Phase 1E (Vercel stage setup)
@@ -25,7 +25,7 @@ ENVIRONMENT = "stage"
 
 [[kv_namespaces]]
 binding = "CONFIG"
-id = ""  # FILL IN: stage KV namespace id (create with `wrangler kv namespace create CONFIG --env stage`)
+id = "0b9a66b980a14bcfb5587b7480ba1a2b"
 
 # ---------------------------------------------------------------------------
 # Stage — explicit, identical to default. Allows `wrangler deploy --env
@@ -47,7 +47,7 @@ ENVIRONMENT = "stage"
 
 [[env.stage.kv_namespaces]]
 binding = "CONFIG"
-id = ""  # FILL IN: stage KV namespace id (same as top-level)
+id = "0b9a66b980a14bcfb5587b7480ba1a2b" 
 
 # ---------------------------------------------------------------------------
 # Production
@@ -66,4 +66,4 @@ ENVIRONMENT = "production"
 
 [[env.production.kv_namespaces]]
 binding = "CONFIG"
-id = ""  # FILL IN: existing prod KV namespace id (used by current dashboard-edited Worker)
+id = "dafb45ca859f470682a34245e253fad9"
