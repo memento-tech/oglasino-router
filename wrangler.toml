@@ -56,7 +56,7 @@ id = "0b9a66b980a14bcfb5587b7480ba1a2b"
 name = "oglasino-router-prod"
 
 [env.production.vars]
-FRONTEND_ORIGIN = "https://oglasino-web.vercel.app"
+FRONTEND_ORIGIN = "https://oglasino-web-prod.vercel.app"
 BACKEND_ORIGIN = "https://api-origin.oglasino.com"
 MAINTENANCE_ORIGIN = "https://oglasino-maintenance.pages.dev"
 APEX_HOST = "oglasino.com"
