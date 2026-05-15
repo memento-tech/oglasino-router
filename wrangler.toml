@@ -11,7 +11,6 @@
 name = "oglasino-router-stage"
 main = "src/index.ts"
 compatibility_date = "2025-09-06"
-
 account_id = "87ccdd5b46d280541d805f80915fa299"
 
 [vars]
@@ -47,7 +46,7 @@ ENVIRONMENT = "stage"
 
 [[env.stage.kv_namespaces]]
 binding = "CONFIG"
-id = "0b9a66b980a14bcfb5587b7480ba1a2b" 
+id = "0b9a66b980a14bcfb5587b7480ba1a2b"
 
 # ---------------------------------------------------------------------------
 # Production
