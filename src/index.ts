@@ -2,7 +2,14 @@
 // Oglasino router Worker.
 // Serves prod and stage environments via wrangler.toml [env.*] config.
 // Routes frontend → Vercel, API → droplet (via gray-cloud origin),
-// maintenance page when KV flag CONFIG.maintenance.active === "true".
+// maintenance page based on KV flags:
+//   - CONFIG.maintenance.active        ("true" | "false")
+//   - CONFIG.admin.bypass.disabled     ("true" | "false")
+//
+// Behavior matrix:
+//   maintenance.active=false                            → allow everyone
+//   maintenance.active=true,  admin.bypass.disabled=false → allow admin + API only
+//   maintenance.active=true,  admin.bypass.disabled=true  → block everyone (full lockdown)
 // ============================================================================
 
 export interface Env {
@@ -18,21 +25,29 @@ export interface Env {
 
 const MAINTENANCE_JSON = JSON.stringify({
   status: "maintenance",
-  message: "Oglasino is undergoing maintenance. Please try again in a few minutes.",
+  message:
+    "Oglasino is undergoing maintenance. Please try again in a few minutes.",
   retryAfter: 120,
 });
 
 const NOINDEX_HEADER = "noindex, nofollow, noarchive, nosnippet";
 
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> {
     const url = new URL(request.url);
     const host = url.hostname.toLowerCase();
     const path = url.pathname;
 
     // www → apex 301 (only when env has a WWW_HOST)
     if (env.WWW_HOST && host === env.WWW_HOST) {
-      return Response.redirect(`https://${env.APEX_HOST}${path}${url.search}`, 301);
+      return Response.redirect(
+        `https://${env.APEX_HOST}${path}${url.search}`,
+        301
+      );
     }
 
     const isApi = host === env.API_HOST;
@@ -42,21 +57,40 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    // Admin path bypasses maintenance
-    const isAdminBypass = path.startsWith("/admin");
+    // Requests that count as "admin infrastructure" and should be allowed
+    // through when maintenance is active but the admin bypass is enabled.
+    const isAdminRequest =
+      // The admin page itself and anything under it (e.g. /rs-sr/admin, /en-us/admin/users)
+      /^\/[a-z]{2}-[a-z]{2}\/admin(\/|$)/i.test(path) ||
+      // All API traffic (admin talks to the backend)
+      isApi ||
+      path.startsWith("/api/") ||
+      // Next.js static assets and chunks
+      path.startsWith("/_next/") ||
+      // Common static files the browser will request
+      path === "/favicon.ico";
 
-    // Read maintenance flag (30s edge cache)
+    // Read both maintenance flags (30s edge cache each)
     let maintenanceActive = false;
+    let adminBypassDisabled = false;
     try {
-      const v = await env.CONFIG.get("maintenance.active", { cacheTtl: 30 });
-      maintenanceActive = v === "true";
+      const [maintRaw, bypassRaw] = await Promise.all([
+        env.CONFIG.get("maintenance.active", { cacheTtl: 30 }),
+        env.CONFIG.get("admin.bypass.disabled", { cacheTtl: 30 }),
+      ]);
+      maintenanceActive = maintRaw === "true";
+      adminBypassDisabled = bypassRaw === "true";
     } catch (_err) {
-      maintenanceActive = false; // fail open on KV errors
+      // Fail open on KV errors — better to serve traffic than to lock everyone out
+      maintenanceActive = false;
+      adminBypassDisabled = false;
     }
 
-    // Optional: backend liveness probe
+    // Optional: backend liveness probe can force maintenance on
     if (!maintenanceActive) {
-      const useBackendCheck = await env.CONFIG.get("use.backend.check", { cacheTtl: 30 });
+      const useBackendCheck = await env.CONFIG.get("use.backend.check", {
+        cacheTtl: 30,
+      });
       if (useBackendCheck === "true") {
         try {
           const probe = await fetch(`${env.BACKEND_ORIGIN}/health`, {
@@ -69,16 +103,35 @@ export default {
       }
     }
 
-    if (maintenanceActive && !isAdminBypass) {
-      return maintenanceResponse(isApi, path, url.search, env);
+    // Block logic:
+    // - Not in maintenance              → let everything through
+    // - In maintenance + bypass enabled → block only non-admin requests
+    // - In maintenance + bypass disabled → block everyone
+    if (maintenanceActive) {
+      const shouldBlock = adminBypassDisabled || !isAdminRequest;
+      if (shouldBlock) {
+        return maintenanceResponse(isApi, path, url.search, env);
+      }
     }
 
     const isStage = env.ENVIRONMENT === "stage";
 
     if (isApi) {
-      return forwardToOrigin(env.BACKEND_ORIGIN, path, url.search, request, isStage);
+      return forwardToOrigin(
+        env.BACKEND_ORIGIN,
+        path,
+        url.search,
+        request,
+        isStage
+      );
     }
-    return forwardToOrigin(env.FRONTEND_ORIGIN, path, url.search, request, isStage);
+    return forwardToOrigin(
+      env.FRONTEND_ORIGIN,
+      path,
+      url.search,
+      request,
+      isStage
+    );
   },
 };
 
@@ -86,7 +139,7 @@ function maintenanceResponse(
   isApi: boolean,
   path: string,
   search: string,
-  env: Env,
+  env: Env
 ): Response | Promise<Response> {
   if (isApi) {
     return new Response(MAINTENANCE_JSON, {
@@ -118,7 +171,7 @@ async function forwardToOrigin(
   path: string,
   search: string,
   originalRequest: Request,
-  addNoIndex: boolean,
+  addNoIndex: boolean
 ): Promise<Response> {
   const targetUrl = `${originBase}${path}${search}`;
 
