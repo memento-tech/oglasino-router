@@ -5,7 +5,7 @@ traffic to:
 
 - Vercel (frontend) for the apex domain
 - Spring Boot droplet (via gray-cloud origin) for `api.*` subdomain
-- Maintenance page when KV flag is set
+- Maintenance page, composed per-client from the `maintenance.web.active` and `maintenance.backend.active` KV flags
 
 ## Branches
 
@@ -21,11 +21,14 @@ npm run dev:production # local dev server against production config
 ```
 
 Trigger maintenance mode locally by writing to KV (requires
-`CLOUDFLARE_API_TOKEN` env var):
+`CLOUDFLARE_API_TOKEN` env var). The worker reads two dependency flags and
+composes the per-client decision; `maintenance.web.active` takes web down,
+`maintenance.backend.active` takes both web and mobile down. For a full web
+maintenance window, set `maintenance.web.active`:
 
 ```bash
-npx wrangler kv key put --env stage --binding CONFIG maintenance.active true
-npx wrangler kv key delete --env stage --binding CONFIG maintenance.active
+npx wrangler kv key put --env stage --binding CONFIG maintenance.web.active true
+npx wrangler kv key delete --env stage --binding CONFIG maintenance.web.active
 ```
 
 ## Testing

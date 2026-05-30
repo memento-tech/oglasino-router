@@ -36,17 +36,36 @@ Wrangler outputs an ID. Paste into `wrangler.toml` under both:
 
 ## Toggle maintenance mode
 
-```bash
-# Enable
-npx wrangler kv key put --env stage --binding CONFIG maintenance.active true
-npx wrangler kv key put --env production --binding CONFIG maintenance.active true
+The Worker reads **two** dependency flags and composes the maintenance
+decision per client. There is no single combined maintenance key — the
+worker reads only the two flags below, so writing any other key has no
+effect.
 
-# Disable
-npx wrangler kv key delete --env stage --binding CONFIG maintenance.active
-npx wrangler kv key delete --env production --binding CONFIG maintenance.active
+- `maintenance.web.active` — takes the **web** surface down (apex + admin +
+  API host). Does NOT affect mobile.
+- `maintenance.backend.active` — takes the **backend** down, which takes
+  **both** web and mobile (`/api/mobile/*`) down (web cannot function without
+  the backend).
+
+`admin.bypass.disabled` shapes who is blocked on the web surface during
+maintenance (see [architecture.md](architecture.md)); it does not apply to
+mobile.
+
+```bash
+# Web maintenance window (web down, mobile unaffected)
+npx wrangler kv key put --env stage --binding CONFIG maintenance.web.active true
+npx wrangler kv key put --env production --binding CONFIG maintenance.web.active true
+npx wrangler kv key delete --env stage --binding CONFIG maintenance.web.active
+npx wrangler kv key delete --env production --binding CONFIG maintenance.web.active
+
+# Backend maintenance window (web AND mobile down)
+npx wrangler kv key put --env stage --binding CONFIG maintenance.backend.active true
+npx wrangler kv key put --env production --binding CONFIG maintenance.backend.active true
+npx wrangler kv key delete --env stage --binding CONFIG maintenance.backend.active
+npx wrangler kv key delete --env production --binding CONFIG maintenance.backend.active
 ```
 
-The Worker caches the KV value at edge for 30s, so changes take up to
+The Worker caches each KV value at edge for 30s, so changes take up to
 30s to fully propagate.
 
 ## Toggle backend liveness probe
@@ -55,9 +74,11 @@ The Worker caches the KV value at edge for 30s, so changes take up to
 npx wrangler kv key put --env stage --binding CONFIG use.backend.check true
 ```
 
-When enabled, the Worker probes `${BACKEND_ORIGIN}/health` before
-forwarding. If the probe fails, requests get the maintenance response
-automatically. Useful during planned droplet outages.
+When enabled, the Worker probes `${BACKEND_ORIGIN}/actuator/health/readiness`
+(30s edge cache) before forwarding **mobile** (`/api/mobile/*`) requests only.
+If the probe fails (non-2xx or throw), that mobile request gets the maintenance
+response automatically. The probe never gates web traffic. Useful during
+planned droplet outages.
 
 ## Debugging
 

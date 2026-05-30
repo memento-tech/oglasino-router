@@ -11,11 +11,12 @@
                 │  │  (or oglasino-router-stage) │   │
                 │  └─────┬───────────────────────┘   │
                 │        │                           │
-                │        ├── reads KV (maintenance.active)
-                │        │                           │
+                │        ├── reads KV (maintenance.web.active,
+                │        │             maintenance.backend.active)
                 │        ▼                           │
                 │   maintenance? ──yes──► maintenance page
-                │        │                  (or 503 JSON for API)
+                │   (composed per      (or 503 JSON for API/mobile)
+                │    client)                         │
                 │        no                          │
                 │        │                           │
                 │        ├── apex/www host? ─►  Vercel (FRONTEND_ORIGIN)
@@ -46,10 +47,23 @@ droplet directly. Solves the recursion problem.
 
 ## Why the same Worker handles frontend and API
 
-Single source of truth for maintenance gating. The KV flag
-`maintenance.active` instantly puts the entire site into a 503 state
-across both frontend and API. No coordination needed between two
-Workers.
+Single source of truth for maintenance gating. The Worker reads two
+dependency flags from KV — `maintenance.web.active` and
+`maintenance.backend.active` — and composes the maintenance decision per
+client on every request:
+
+- **Web / apex / API host:** down when `maintenance.web.active OR
+  maintenance.backend.active` (web cannot function without the backend).
+  During maintenance, `admin.bypass.disabled` decides who is blocked —
+  `false` lets admin + API through, `true` is a full lockdown.
+- **Mobile (`/api/mobile/*`):** down when `maintenance.backend.active OR` the
+  backend liveness probe fails. Mobile depends only on the backend, so
+  `maintenance.web.active` does not affect it and the admin bypass does not
+  apply.
+
+So `maintenance.web.active` takes only web down (mobile keeps running on a
+live backend), while `maintenance.backend.active` takes both down. No
+coordination needed between two Workers.
 
 ## Stage routing differences
 

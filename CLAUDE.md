@@ -63,11 +63,29 @@ These parts of the worker behave deliberately and are easy to break "improving" 
 
 ### The maintenance matrix
 
-The comment block at the top of `src/index.ts` defines the matrix:
+The comment block at the top of `src/index.ts` defines the matrix. Maintenance is **composed per-client** from two dependency flags in the `CONFIG` KV namespace — the worker reads no single combined maintenance key:
 
-- `maintenance.active=false` → allow everyone
-- `maintenance.active=true, admin.bypass.disabled=false` → allow admin + API only
-- `maintenance.active=true, admin.bypass.disabled=true` → block everyone (full lockdown)
+- `maintenance.web.active` — web's own maintenance state
+- `maintenance.backend.active` — backend's maintenance state
+- `admin.bypass.disabled` — when `true`, admins are blocked too (full lockdown); web/admin path only
+- `use.backend.check` — when `true`, enables the backend liveness probe (mobile path only)
+
+Each flag is `"true"` | `"false"`; absent/null = `false` = up. The worker composes a per-client decision on every request:
+
+**Web / apex / API-host request** (everything except `/api/mobile/*`):
+
+- `webDown = maintenance.web.active OR maintenance.backend.active` (web cannot function without the backend, so a backend-down also takes web down; the probe does NOT gate web)
+- When `webDown` and `admin.bypass.disabled=false` → allow admin + API only (block non-admin requests)
+- When `webDown` and `admin.bypass.disabled=true` → block everyone (full lockdown)
+
+**Mobile request** (path starts with `/api/mobile/`):
+
+- `backendDown = maintenance.backend.active OR probeFailed`
+- Mobile depends only on the backend: `maintenance.web.active` does NOT affect mobile, and `admin.bypass.disabled` does NOT apply (mobile has no admin surface)
+- When `backendDown` → 503 maintenance JSON (mobile keys off the `X-Oglasino-Maintenance` header, not the bare 503)
+- Otherwise the worker strips the `/mobile` segment (`/api/mobile/<rest>` → `/api/<rest>`) and forwards to the backend
+
+The probe (gated by `use.backend.check`, mobile path only) GETs `BACKEND_ORIGIN/actuator/health/readiness` with a 30s edge cache; a non-2xx or thrown probe sets `probeFailed`. It gates mobile only — never web.
 
 The matrix is the spec. Any code change has to keep the matrix true. If the brief asks you to change the matrix itself, update the comment block in lockstep with the code, and flag the change in "For Mastermind."
 
