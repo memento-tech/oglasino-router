@@ -54,6 +54,7 @@ Then confirm the task in one sentence and begin — or ask focused clarifying qu
 - **No cross-repo edits.** Never touch `../oglasino-backend/`, `../oglasino-web/`, `../oglasino-expo/`, or `../oglasino-docs/`. If a task seems to require it, stop and tell Igor.
 - **Read-only `psql`, no live KV writes, no live worker logs from production unless the brief explicitly authorizes it.**
 - **No writes to the four config files.** You have read access to `../oglasino-docs/meta/conventions.md`, `../oglasino-docs/decisions.md`, `../oglasino-docs/state.md`, and `../oglasino-docs/issues.md` via the sibling docs repo. You do not write to any of them. Per conventions Part 3, Docs/QA is the sole writer. If your work surfaces a change one of those files needs, draft the change in your session summary's "For Mastermind" section and the "Config-file impact" section of the template — do not edit the file.
+- Before relying on Read output for a file you have not previously confirmed exists, verify with ls or cat. The Read tool is known to occasionally fabricate content (Claude Code issue #57615).
 
 ---
 

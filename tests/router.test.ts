@@ -736,6 +736,46 @@ describe("router", () => {
       const res = await worker.fetch(req, env, ctx);
       expect(res.headers.get("X-Robots-Tag")).toBeNull();
     });
+
+    it("added on the stage maintenance HTML 503 response", async () => {
+      const env = stageEnv({ "maintenance.web.active": "true" });
+      const fetchMock = vi.fn(
+        async (_input: unknown) =>
+          new Response("<html>maint</html>", {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://stage.oglasino.com/foo");
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(503);
+      expect(res.headers.get("X-Oglasino-Maintenance")).toBe("true");
+      expect(res.headers.get("X-Robots-Tag")).toBe(
+        "noindex, nofollow, noarchive, nosnippet"
+      );
+      // Served from MAINTENANCE_ORIGIN (the HTML branch), not the origin.
+      expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
+        "https://oglasino-maintenance.pages.dev/foo"
+      );
+    });
+
+    it("not added on the production maintenance HTML 503 response", async () => {
+      const env = prodEnv({ "maintenance.web.active": "true" });
+      const fetchMock = vi.fn(
+        async (_input: unknown) =>
+          new Response("<html>maint</html>", {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/foo");
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(503);
+      expect(res.headers.get("X-Oglasino-Maintenance")).toBe("true");
+      expect(res.headers.get("X-Robots-Tag")).toBeNull();
+    });
   });
 
   describe("forwarding", () => {

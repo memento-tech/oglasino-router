@@ -152,7 +152,7 @@ export default {
         }
       }
       if (backendDown) {
-        return maintenanceResponse(true, path, url.search, env);
+        return maintenanceResponse(true, path, url.search, env, isStage);
       }
       // Strip the /mobile segment: /api/mobile/<rest> → /api/<rest>.
       const backendPath = "/api" + path.slice("/api/mobile".length);
@@ -173,7 +173,7 @@ export default {
     if (webDown) {
       const shouldBlock = adminBypassDisabled || !isAdminRequest;
       if (shouldBlock) {
-        return maintenanceResponse(isApi, path, url.search, env);
+        return maintenanceResponse(isApi, path, url.search, env, isStage);
       }
     }
 
@@ -200,7 +200,8 @@ function maintenanceResponse(
   isApi: boolean,
   path: string,
   search: string,
-  env: Env
+  env: Env,
+  addNoIndex: boolean
 ): Response | Promise<Response> {
   if (isApi) {
     return new Response(MAINTENANCE_JSON, {
@@ -219,6 +220,11 @@ function maintenanceResponse(
     headers.set("X-Oglasino-Maintenance", "true");
     headers.set("Cache-Control", "no-store");
     headers.set("Retry-After", "120");
+    // Stage maintenance pages must not be indexed, same as forwarded stage
+    // traffic — the MAINTENANCE_ORIGIN upstream doesn't set this itself.
+    if (addNoIndex) {
+      headers.set("X-Robots-Tag", NOINDEX_HEADER);
+    }
     return new Response(upstream.body, {
       status: 503,
       statusText: "Service Unavailable",
