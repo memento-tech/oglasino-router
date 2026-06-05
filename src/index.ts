@@ -130,7 +130,7 @@ const ASSETLINKS_STAGE = JSON.stringify([
     target: {
       namespace: "android_app",
       package_name: "com.oglasino.preview",
-      sha256_cert_fingerprints: ["REPLACE_AFTER_PREVIEW_KEYSTORE_SETUP"],
+      sha256_cert_fingerprints: ["8E:BB:98:89:E6:8C:2B:3D:7E:AC:46:96:D7:38:C4:01:E6:18:85:B6:DF:E8:19:52:DE:EC:08:1A:CC:D7:6C:5A"],
     },
   },
 ]);
