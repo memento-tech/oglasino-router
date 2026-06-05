@@ -778,6 +778,150 @@ describe("router", () => {
     });
   });
 
+  describe(".well-known app-association files (direct-served)", () => {
+    it("prod AASA → 200 application/json with com.oglasino appID", async () => {
+      const env = prodEnv();
+      const fetchMock = vi.fn(
+        async (_input: unknown) => new Response("should not forward", {
+          status: 200,
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request(
+        "https://oglasino.com/.well-known/apple-app-site-association"
+      );
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("application/json");
+      expect(res.headers.get("Cache-Control")).toBe("max-age=3600");
+      const body = (await res.json()) as {
+        applinks: { details: Array<{ appIDs: string[]; components: unknown[] }> };
+      };
+      expect(body.applinks.details[0].appIDs).toEqual([
+        "44PHQVN8PB.com.oglasino",
+      ]);
+      expect(body.applinks.details[0].components).toHaveLength(9);
+      // Served by the worker, not the origin.
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("stage AASA → preview appID (tier-correct, keyed off env not host)", async () => {
+      const env = stageEnv();
+      const fetchMock = vi.fn(
+        async (_input: unknown) => new Response("should not forward", {
+          status: 200,
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request(
+        "https://stage.oglasino.com/.well-known/apple-app-site-association"
+      );
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        applinks: { details: Array<{ appIDs: string[] }> };
+      };
+      expect(body.applinks.details[0].appIDs).toEqual([
+        "44PHQVN8PB.com.oglasino.preview",
+      ]);
+      // No stage noindex header (not routed through forwardToOrigin).
+      expect(res.headers.get("X-Robots-Tag")).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("prod assetlinks → 200 application/json with com.oglasino package", async () => {
+      const env = prodEnv();
+      const fetchMock = vi.fn(
+        async (_input: unknown) => new Response("should not forward", {
+          status: 200,
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request(
+        "https://oglasino.com/.well-known/assetlinks.json"
+      );
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("application/json");
+      const body = (await res.json()) as Array<{
+        target: { package_name: string };
+      }>;
+      expect(body[0].target.package_name).toBe("com.oglasino");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("stage assetlinks → com.oglasino.preview package (tier-correct)", async () => {
+      const env = stageEnv();
+      const fetchMock = vi.fn(
+        async (_input: unknown) => new Response("should not forward", {
+          status: 200,
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request(
+        "https://stage.oglasino.com/.well-known/assetlinks.json"
+      );
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{
+        target: { package_name: string };
+      }>;
+      expect(body[0].target.package_name).toBe("com.oglasino.preview");
+      expect(res.headers.get("X-Robots-Tag")).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("served even when maintenance is active (bypasses the gate)", async () => {
+      const env = prodEnv({
+        "maintenance.web.active": "true",
+        "maintenance.backend.active": "true",
+        "admin.bypass.disabled": "true",
+      });
+      const fetchMock = vi.fn(
+        async (_input: unknown) =>
+          new Response("<html>maint</html>", { status: 200 })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request(
+        "https://oglasino.com/.well-known/apple-app-site-association"
+      );
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("application/json");
+      expect(res.headers.get("X-Oglasino-Maintenance")).toBeNull();
+      // Full lockdown is set, yet no maintenance origin was hit.
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("not redirected on apex (served directly, not 301'd)", async () => {
+      const env = prodEnv();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("x", { status: 200 }))
+      );
+      const req = new Request(
+        "https://oglasino.com/.well-known/assetlinks.json"
+      );
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Location")).toBeNull();
+    });
+
+    it("an unrelated path still forwards as before (no regression)", async () => {
+      const env = prodEnv();
+      const fetchMock = vi.fn(
+        async (_input: unknown) => new Response("<html/>", { status: 200 })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/.well-known/other.txt");
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
+        "https://oglasino-web-prod.vercel.app/.well-known/other.txt"
+      );
+    });
+  });
+
   describe("forwarding", () => {
     it("X-Forwarded-Host + X-Forwarded-Proto set when forwarding to origin", async () => {
       const env = prodEnv();

@@ -40,6 +40,14 @@
 // Fail-open: if any CONFIG.get throws, all four flags fall back to false
 //   (= everything up). Better to serve traffic than to lock everyone out on a
 //   transient KV outage. Do not change this to fail closed.
+//
+// .well-known app-association files BYPASS this matrix (deliberate exception):
+//   GET /.well-known/apple-app-site-association and /.well-known/assetlinks.json
+//   are served directly by the worker, before the maintenance gate / origin
+//   forward / KV reads, and tier-correct per env (prod = com.oglasino,
+//   stage = com.oglasino.preview). A 503 (or an origin-emitted redirect) for
+//   these during a maintenance window can de-verify the domain's app
+//   association — verification must survive maintenance.
 // ============================================================================
 
 export interface Env {
@@ -62,6 +70,71 @@ const MAINTENANCE_JSON = JSON.stringify({
 
 const NOINDEX_HEADER = "noindex, nofollow, noarchive, nosnippet";
 
+// .well-known app-association files, served directly by the worker (see the
+// maintenance-matrix note above). Tier-correct: prod uses the com.oglasino
+// identifiers, stage the com.oglasino.preview ones. The iOS Team ID
+// (44PHQVN8PB) is shared across tiers. The Android sha256 fingerprints are
+// tracked placeholders until each keystore is registered (prod: Play Console;
+// stage: the EAS preview keystore).
+const WELL_KNOWN_AASA_PATH = "/.well-known/apple-app-site-association";
+const WELL_KNOWN_ASSETLINKS_PATH = "/.well-known/assetlinks.json";
+
+// Identical across tiers; only the appID differs. Shared so the two AASA bodies
+// can't drift apart. The leading /*/ wildcard matches the locale segment (the OS
+// matches the un-stripped web URL; +native-intent strips the locale afterward).
+const AASA_COMPONENTS = [
+  { "/": "/*/product/*" },
+  { "/": "/*/user/*" },
+  { "/": "/*/catalog" },
+  { "/": "/*/catalog/*" },
+  { "/": "/*/about" },
+  { "/": "/*/pricing" },
+  { "/": "/*/privacy" },
+  { "/": "/*/terms" },
+  { "/": "/*/blog/free-zone" },
+];
+
+const AASA_PROD = JSON.stringify({
+  applinks: {
+    details: [
+      { appIDs: ["44PHQVN8PB.com.oglasino"], components: AASA_COMPONENTS },
+    ],
+  },
+});
+
+const AASA_STAGE = JSON.stringify({
+  applinks: {
+    details: [
+      {
+        appIDs: ["44PHQVN8PB.com.oglasino.preview"],
+        components: AASA_COMPONENTS,
+      },
+    ],
+  },
+});
+
+const ASSETLINKS_PROD = JSON.stringify([
+  {
+    relation: ["delegate_permission/common.handle_all_urls"],
+    target: {
+      namespace: "android_app",
+      package_name: "com.oglasino",
+      sha256_cert_fingerprints: ["REPLACE_AFTER_PLAY_CONSOLE_SETUP"],
+    },
+  },
+]);
+
+const ASSETLINKS_STAGE = JSON.stringify([
+  {
+    relation: ["delegate_permission/common.handle_all_urls"],
+    target: {
+      namespace: "android_app",
+      package_name: "com.oglasino.preview",
+      sha256_cert_fingerprints: ["REPLACE_AFTER_PREVIEW_KEYSTORE_SETUP"],
+    },
+  },
+]);
+
 export default {
   async fetch(
     request: Request,
@@ -78,6 +151,30 @@ export default {
         `https://${env.APEX_HOST}${path}${url.search}`,
         301
       );
+    }
+
+    // Serve the .well-known app-association files directly — before the
+    // maintenance gate, the origin forward, and the KV reads. Tier-correct per
+    // env (not host); built without forwardToOrigin so no redirect or stage
+    // noindex header attaches. Deliberate maintenance-matrix exception (see the
+    // note at the top of this file).
+    if (path === WELL_KNOWN_AASA_PATH || path === WELL_KNOWN_ASSETLINKS_PATH) {
+      const isStageEnv = env.ENVIRONMENT === "stage";
+      const body =
+        path === WELL_KNOWN_AASA_PATH
+          ? isStageEnv
+            ? AASA_STAGE
+            : AASA_PROD
+          : isStageEnv
+            ? ASSETLINKS_STAGE
+            : ASSETLINKS_PROD;
+      return new Response(body, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "max-age=3600",
+        },
+      });
     }
 
     const isApi = host === env.API_HOST;

@@ -1,71 +1,141 @@
-# oglasino-router
+# Oglasino Router
 
-Cloudflare Worker that routes `oglasino.com` (and stage equivalent)
-traffic to:
+A single Cloudflare Worker that is the edge front door for `oglasino.com` (and its stage
+equivalent). It matches the incoming host/path, composes the per-client maintenance decision
+from KV flags, and forwards traffic to the right origin — Vercel for the site, the Spring Boot
+droplet for the API.
 
-- Vercel (frontend) for the apex domain
-- Spring Boot droplet (via gray-cloud origin) for `api.*` subdomain
-- Maintenance page, composed per-client from the `maintenance.web.active` and `maintenance.backend.active` KV flags
+Part of the **Oglasino** platform. Cross-repo specs, conventions, and architecture live in
+[`../oglasino-docs`](../oglasino-docs). The whole product is one file — `src/index.ts`
+(~200 lines) — but every line carries production traffic.
 
-## Branches
+---
 
-- `main` (default) → deploys to `oglasino-router-prod`, serves `oglasino.com`
-- `stage` → deploys to `oglasino-router-stage`, serves `stage.oglasino.com`
+## What it does
+
+On every request the worker:
+
+1. **Routes by host.**
+   - Apex / `www` → Vercel frontend (`FRONTEND_ORIGIN`).
+   - API host (`api.oglasino.com` / `api-stage.oglasino.com`) → Spring Boot droplet (`BACKEND_ORIGIN`, gray-cloud origin).
+   - When maintenance is engaged → maintenance page (`MAINTENANCE_ORIGIN`), HTTP 503, without touching the backend.
+2. **Composes maintenance per client** from the `CONFIG` KV namespace (see the matrix below). There is no single combined maintenance key.
+3. **Gates mobile API traffic** (`/api/mobile/*`) on backend availability via an edge-cached liveness probe, then strips the `/mobile` segment and forwards.
+4. **Forces `X-Robots-Tag: noindex`** on every stage response so staging never gets indexed.
+5. **Fails open** — if a KV read throws, both flags are treated as `false` and traffic is served.
+
+## Tech stack
+
+- **Runtime:** Cloudflare Workers (bare `fetch` handler, **zero runtime dependencies**)
+- **Language:** TypeScript
+- **Tooling:** Wrangler 4, Vitest, `tsc --noEmit` for lint
+- **State:** Cloudflare KV namespace `CONFIG` (maintenance + runtime config flags)
+
+## The maintenance matrix
+
+Maintenance is composed per request from KV flags. Each flag is `"true"` | `"false"`;
+absent/null = `false` = up.
+
+| Flag | Effect |
+|---|---|
+| `maintenance.web.active` | Web's own maintenance state |
+| `maintenance.backend.active` | Backend maintenance state |
+| `admin.bypass.disabled` | When `true`, admins are blocked too (full lockdown); web/admin path only |
+| `use.backend.check` | When `true`, enables the backend liveness probe (mobile path only) |
+
+**Web / apex / API-host request** (everything except `/api/mobile/*`):
+
+- `webDown = maintenance.web.active OR maintenance.backend.active` — web cannot function without the backend, so a backend-down also takes web down. The probe does **not** gate web.
+- `webDown` + `admin.bypass.disabled=false` → allow admin + API only (non-admin blocked).
+- `webDown` + `admin.bypass.disabled=true` → full lockdown, everyone blocked.
+
+**Mobile request** (`/api/mobile/*`):
+
+- `backendDown = maintenance.backend.active OR probeFailed`.
+- Mobile depends only on the backend: `maintenance.web.active` and `admin.bypass.disabled` do not apply.
+- `backendDown` → 503 maintenance JSON (clients key off the `X-Oglasino-Maintenance` header).
+- Otherwise strip `/mobile` (`/api/mobile/<rest>` → `/api/<rest>`) and forward to the backend.
+
+The probe (gated by `use.backend.check`, mobile only) GETs
+`BACKEND_ORIGIN/actuator/health/readiness` with a 30s edge cache; a non-2xx or thrown probe
+sets `probeFailed`.
+
+> **Care areas** (deliberate, easy to break): the maintenance matrix, fail-open on KV errors,
+> the locale-prefixed admin-request regex `/^\/[a-z]{2}-[a-z]{2}\/admin(\/|$)/i`, the forced
+> stage `noindex` header, and `redirect: "manual"` in `forwardToOrigin` (so upstream 3xx pass
+> through unchanged). See [`CLAUDE.md`](CLAUDE.md) before changing any of them.
+
+## Environments
+
+| Branch | Worker | Domain |
+|---|---|---|
+| `stage` | `oglasino-router-stage` | `stage.oglasino.com` |
+| `main` (default) | `oglasino-router-prod` | `oglasino.com` |
+
+Origins (`FRONTEND_ORIGIN`, `BACKEND_ORIGIN`, `MAINTENANCE_ORIGIN`) and hosts are set per env
+in [`wrangler.toml`](wrangler.toml). **Routes / custom domains are configured in the
+Cloudflare dashboard** (Workers & Pages → worker → Triggers → Custom Domains), not in
+`wrangler.toml`. `wrangler deploy` with no `--env` deploys to **stage** — production requires
+explicit `--env production`.
+
+## Project structure
+
+```text
+oglasino-router/
+├── src/index.ts     # the entire worker: routing + maintenance + forwarding
+├── tests/           # Vitest suites (CONFIG KV is mocked, never live)
+├── docs/
+│   ├── architecture.md
+│   └── operations.md   # maintenance toggling, KV management, debugging
+├── wrangler.toml    # env bindings (stage default + production)
+└── package.json
+```
 
 ## Local development
 
 ```bash
 npm install
-npm run dev:stage      # local dev server against stage config
-npm run dev:production # local dev server against production config
+npm run dev:stage        # local dev server against stage config
+npm run dev:production    # local dev server against production config
+npm run lint             # tsc --noEmit
+npm test                 # vitest (CONFIG KV is mocked)
 ```
 
-Trigger maintenance mode locally by writing to KV (requires
-`CLOUDFLARE_API_TOKEN` env var). The worker reads two dependency flags and
-composes the per-client decision; `maintenance.web.active` takes web down,
-`maintenance.backend.active` takes both web and mobile down. For a full web
-maintenance window, set `maintenance.web.active`:
+Toggle maintenance against a real KV namespace (requires `CLOUDFLARE_API_TOKEN`). Setting
+`maintenance.web.active` takes web down; `maintenance.backend.active` takes web **and** mobile
+down:
 
 ```bash
-npx wrangler kv key put --env stage --binding CONFIG maintenance.web.active true
+npx wrangler kv key put    --env stage --binding CONFIG maintenance.web.active true
 npx wrangler kv key delete --env stage --binding CONFIG maintenance.web.active
-```
-
-## Testing
-
-```bash
-npm test
 ```
 
 ## Deploy
 
-Push to `stage` or `main`. GH Actions handles the rest.
-
-Manual deploy:
+Push to `stage` or `main` and GitHub Actions deploys. Manual deploy (requires
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`):
 
 ```bash
 npm run deploy:stage
 npm run deploy:production
 ```
 
-Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` env vars
-locally for manual deploy.
+Operational procedures (maintenance windows, KV management, debugging) are in
+[`docs/operations.md`](docs/operations.md); the design rationale is in
+[`docs/architecture.md`](docs/architecture.md).
 
-## Architecture
+## Related repos
 
-See [docs/architecture.md](docs/architecture.md).
+| Repo | Role |
+|---|---|
+| [`oglasino-web`](../oglasino-web) | Vercel frontend the apex routes to |
+| [`oglasino-backend`](../oglasino-backend) | API origin the worker forwards to |
+| [`oglasino-image-worker`](../oglasino-image-worker) | Sibling Worker — image PUT/GET against R2 |
+| [`oglasino-maintenance`](../oglasino-maintenance) | Static maintenance page served during downtime |
+| [`oglasino-docs`](../oglasino-docs) | Specs, conventions, architecture, decisions |
 
-## Operations
+---
 
-Maintenance mode toggling, KV management, debugging, route migration
-from the dashboard-edited prod Worker. See
-[docs/operations.md](docs/operations.md).
-
-## Status
-
-- [ ] Repo bootstrapped (this PR)
-- [ ] Prod Worker re-deployed from this repo (verifies parity with dashboard-edited version)
-- [ ] Routes migrated from `oglasino-prod-router` to `oglasino-router-prod` on Cloudflare
-- [ ] Old `oglasino-prod-router` Worker deleted from Cloudflare
-- [ ] Stage Worker deployed for the first time
-- [ ] DNS records configured for stage subdomains (Phase 1C.2-1C.4)
+> `CLAUDE.md` governs the AI engineer agent that works in this repo. Igor commits; the agent
+> never deploys.
+</content>
