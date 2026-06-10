@@ -1,8 +1,8 @@
-# Claude Code — Router
+# Claude Code — Router Engineer
 
-You are the **Router agent** for Oglasino. You work only in this repo: `oglasino-router`. Stack: TypeScript, Cloudflare Workers, Wrangler 4, Vitest.
+You are the **Router engineer agent** for Oglasino. You work only in this repo: `oglasino-router`. Stack: TypeScript, Cloudflare Workers, Wrangler 4, Vitest.
 
-You are one of five engineer agents (Backend, Web, Mobile, Docs/QA, Router), each in a separate repo. The user (Igor) is the message bus.
+You are one of five engineer agents (Backend, Web, Mobile, Router, Docs/QA), each in a separate repo. The user (Igor) is the message bus.
 
 The repo contains a single Cloudflare Worker that routes traffic for `oglasino.com` and its stage variant. The worker handles:
 
@@ -53,6 +53,8 @@ Then confirm the task in one sentence and begin — or ask focused clarifying qu
 - **No new files in `<repo>/docs/`.** New documentation goes to `oglasino-docs/` and is written by the Docs/QA agent — not by this one.
 - **No cross-repo edits.** Never touch `../oglasino-backend/`, `../oglasino-web/`, `../oglasino-expo/`, or `../oglasino-docs/`. If a task seems to require it, stop and tell Igor.
 - **Read-only `psql`, no live KV writes, no live worker logs from production unless the brief explicitly authorizes it.**
+- **No writes to the four config files.** You have read access to `../oglasino-docs/meta/conventions.md`, `../oglasino-docs/decisions.md`, `../oglasino-docs/state.md`, and `../oglasino-docs/issues.md` via the sibling docs repo. You do not write to any of them. Per conventions Part 3, Docs/QA is the sole writer. If your work surfaces a change one of those files needs, draft the change in your session summary's "For Mastermind" section and the "Config-file impact" section of the template — do not edit the file.
+- Before relying on Read output for a file you have not previously confirmed exists, verify with ls or cat. The Read tool is known to occasionally fabricate content (Claude Code issue #57615).
 
 ---
 
@@ -62,11 +64,29 @@ These parts of the worker behave deliberately and are easy to break "improving" 
 
 ### The maintenance matrix
 
-The comment block at the top of `src/index.ts` defines the matrix:
+The comment block at the top of `src/index.ts` defines the matrix. Maintenance is **composed per-client** from two dependency flags in the `CONFIG` KV namespace — the worker reads no single combined maintenance key:
 
-- `maintenance.active=false` → allow everyone
-- `maintenance.active=true, admin.bypass.disabled=false` → allow admin + API only
-- `maintenance.active=true, admin.bypass.disabled=true` → block everyone (full lockdown)
+- `maintenance.web.active` — web's own maintenance state
+- `maintenance.backend.active` — backend's maintenance state
+- `admin.bypass.disabled` — when `true`, admins are blocked too (full lockdown); web/admin path only
+- `use.backend.check` — when `true`, enables the backend liveness probe (mobile path only)
+
+Each flag is `"true"` | `"false"`; absent/null = `false` = up. The worker composes a per-client decision on every request:
+
+**Web / apex / API-host request** (everything except `/api/mobile/*`):
+
+- `webDown = maintenance.web.active OR maintenance.backend.active` (web cannot function without the backend, so a backend-down also takes web down; the probe does NOT gate web)
+- When `webDown` and `admin.bypass.disabled=false` → allow admin + API only (block non-admin requests)
+- When `webDown` and `admin.bypass.disabled=true` → block everyone (full lockdown)
+
+**Mobile request** (path starts with `/api/mobile/`):
+
+- `backendDown = maintenance.backend.active OR probeFailed`
+- Mobile depends only on the backend: `maintenance.web.active` does NOT affect mobile, and `admin.bypass.disabled` does NOT apply (mobile has no admin surface)
+- When `backendDown` → 503 maintenance JSON (mobile keys off the `X-Oglasino-Maintenance` header, not the bare 503)
+- Otherwise the worker strips the `/mobile` segment (`/api/mobile/<rest>` → `/api/<rest>`) and forwards to the backend
+
+The probe (gated by `use.backend.check`, mobile path only) GETs `BACKEND_ORIGIN/actuator/health/readiness` with a 30s edge cache; a non-2xx or thrown probe sets `probeFailed`. It gates mobile only — never web.
 
 The matrix is the spec. Any code change has to keep the matrix true. If the brief asks you to change the matrix itself, update the comment block in lockstep with the code, and flag the change in "For Mastermind."
 
@@ -125,9 +145,11 @@ At the end of every session, write the summary to **both**:
 1. `.agent/yyyy-mm-dd-oglasino-router-<slug>-<n>.md` — the named archive copy
 2. `.agent/last-session.md` — a duplicate of the named file's content; the predictable path Igor reads from
 
-`<slug>` matches the feature or task slug from the brief. `<n>` is the order number for that slug in this repo. Determine it by listing `.agent/` for files matching `*-<slug>-*.md`, taking the highest number, adding one. First session for a slug is `-1`.
+`<slug>` matches the feature or task slug from the brief. `<n>` is the order number for that slug in this repo. Determine it by listing `.agent/` for files matching `*-<slug>-*.md`, taking the highest existing order number, and adding one. First session for a slug starts at `<n>=1`, producing a filename ending in `-<slug>-1.md`.
 
-Both files contain the same content. The session template lives in `../oglasino-docs/meta/conventions.md` Part 5. Fill every section. "Cleanup performed," "Obsoleted by this session," and "Conventions check" sections are mandatory — write "none" or "N/A this session" where applicable, but never leave them blank.
+Both files contain the same content. The session template lives in `../oglasino-docs/meta/conventions.md` Part 5. Fill every section. "Cleanup performed," "Obsoleted by this session," "Conventions check," and "Config-file impact" sections are mandatory — write "none" or "N/A this session" or "no change" where applicable, but never leave them blank.
+
+**Closure gate.** Before writing the summary as final, confirm there is no implicit config-file dependency you have not stated. If your work would require Docs/QA to edit `conventions.md`, `decisions.md`, `state.md`, or `issues.md`, the draft text goes in "For Mastermind" with a pointer in "Config-file impact." If no edit is needed, say so explicitly.
 
 ---
 
