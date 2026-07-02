@@ -73,9 +73,9 @@ const NOINDEX_HEADER = "noindex, nofollow, noarchive, nosnippet";
 // .well-known app-association files, served directly by the worker (see the
 // maintenance-matrix note above). Tier-correct: prod uses the com.oglasino
 // identifiers, stage the com.oglasino.preview ones. The iOS Team ID
-// (44PHQVN8PB) is shared across tiers. The Android sha256 fingerprints are
-// tracked placeholders until each keystore is registered (prod: Play Console;
-// stage: the EAS preview keystore).
+// (44PHQVN8PB) is shared across tiers. The Android sha256 fingerprints are the
+// registered signing-key SHA-256s (prod: the Play App Signing key + the upload
+// key from Play Console; stage: the EAS preview keystore).
 const WELL_KNOWN_AASA_PATH = "/.well-known/apple-app-site-association";
 const WELL_KNOWN_ASSETLINKS_PATH = "/.well-known/assetlinks.json";
 
@@ -119,7 +119,10 @@ const ASSETLINKS_PROD = JSON.stringify([
     target: {
       namespace: "android_app",
       package_name: "com.oglasino",
-      sha256_cert_fingerprints: ["REPLACE_AFTER_PLAY_CONSOLE_SETUP"],
+      sha256_cert_fingerprints: [
+        "F3:65:E3:D9:BE:B0:90:D8:BD:3B:CD:B6:71:1B:F8:34:9C:7B:A8:20:4F:74:95:51:DE:11:02:EA:AE:87:92:83",
+        "31:11:F7:8A:6A:CB:8F:C3:18:C9:E9:CA:66:67:2A:72:4C:56:52:B3:B0:49:FD:37:A6:A5:57:02:32:9A:C5:B1",
+      ],
     },
   },
 ]);
