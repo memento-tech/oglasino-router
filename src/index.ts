@@ -348,6 +348,11 @@ async function forwardToOrigin(
     newHeaders.set("X-Forwarded-Host", originalHost);
     newHeaders.set("X-Forwarded-Proto", "https");
   }
+  // Marks the request as having passed through this Worker, so the origin can
+  // tell edge-proxied traffic from a direct hit on the *.vercel.app host and
+  // redirect the latter to the canonical host. Spoofable by design — it gates
+  // nothing (see the brief's trust-boundary note).
+  newHeaders.set("x-oglasino-edge", "1");
 
   const forwarded = new Request(targetUrl, {
     method: originalRequest.method,

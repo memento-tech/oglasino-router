@@ -1,6 +1,6 @@
 {
   "name": "oglasino-router",
-  "version": "1",
+  "version": "2",
   "private": true,
   "description": "Cloudflare Worker that routes oglasino.com traffic to Vercel/API/maintenance",
   "scripts": {

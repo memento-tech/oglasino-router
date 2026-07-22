@@ -961,6 +961,87 @@ describe("router", () => {
       expect(capturedUrl).toBe("https://api-origin.oglasino.com/v1/things");
     });
 
+    it("x-oglasino-edge: 1 set on the forwarded frontend request", async () => {
+      const env = prodEnv();
+      let captured: Request | null = null;
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (input instanceof Request) captured = input;
+        return new Response("ok", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/page");
+      await worker.fetch(req, env, ctx);
+      const fwd = captured as unknown as Request;
+      expect(fwd.headers.get("x-oglasino-edge")).toBe("1");
+    });
+
+    it("x-oglasino-edge: 1 set on the forwarded backend (API) request", async () => {
+      const env = prodEnv();
+      let captured: Request | null = null;
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (input instanceof Request) captured = input;
+        return new Response("ok", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://api.oglasino.com/v1/things", {
+        method: "POST",
+      });
+      await worker.fetch(req, env, ctx);
+      const fwd = captured as unknown as Request;
+      expect(fwd.headers.get("x-oglasino-edge")).toBe("1");
+    });
+
+    it("x-oglasino-edge: 1 set on the admin bypass forward during maintenance", async () => {
+      const env = prodEnv({ "maintenance.web.active": "true" });
+      let captured: Request | null = null;
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (input instanceof Request) captured = input;
+        return new Response("<html/>", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/rs-sr/admin/users");
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      const fwd = captured as unknown as Request;
+      expect(fwd.headers.get("x-oglasino-edge")).toBe("1");
+    });
+
+    it("x-oglasino-edge: 1 set on the mobile stripped forward", async () => {
+      const env = prodEnv();
+      let captured: Request | null = null;
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (input instanceof Request) captured = input;
+        return new Response("from origin", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/api/mobile/v1/things");
+      await worker.fetch(req, env, ctx);
+      const fwd = captured as unknown as Request;
+      expect(fwd.headers.get("x-oglasino-edge")).toBe("1");
+    });
+
+    it("maintenance response served by the worker does NOT carry x-oglasino-edge on its upstream fetch", async () => {
+      const env = prodEnv({ "maintenance.web.active": "true" });
+      let captured: Request | null = null;
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (input instanceof Request) captured = input;
+        return new Response("<html>maint</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/foo");
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(503);
+      // The MAINTENANCE_ORIGIN fetch is a bare fetch(url), not a forwarded
+      // Request — so nothing sets the edge marker on it.
+      expect(captured).toBeNull();
+      expect(urlOf(fetchMock.mock.calls[0][0])).toBe(
+        "https://oglasino-maintenance.pages.dev/foo"
+      );
+    });
+
     it("query string preserved when forwarding", async () => {
       const env = prodEnv();
       let capturedUrl: string | null = null;
