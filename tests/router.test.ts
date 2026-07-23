@@ -56,6 +56,22 @@ function stageEnv(
   };
 }
 
+// The exact URLs the backend liveness probe must fetch, per env. Pinned as
+// literals (not built from a shared constant) so a change to the probe path in
+// src/ fails these tests instead of silently following along — the 2026-07-23
+// outage was a probe URL the origin does not serve.
+const PROD_PROBE_URL =
+  "https://api-origin.oglasino.com/api/public/health/check";
+const STAGE_PROBE_URL =
+  "https://api-origin-stage.oglasino.com/api/public/health/check";
+
+// The probe now lives under /api/ like the forwarded mobile traffic, so "is
+// this the probe call?" is an exact-URL comparison, never a prefix match.
+function isProbeCall(input: unknown): boolean {
+  const u = urlOf(input);
+  return u === PROD_PROBE_URL || u === STAGE_PROBE_URL;
+}
+
 function urlOf(input: unknown): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.toString();
@@ -437,12 +453,18 @@ describe("router", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("probe fails (non-ok) → mobile gets 503", async () => {
+    // 404 and 403 are the two statuses the old /actuator/health/readiness target
+    // actually returned in production (bare /actuator/* 404s at the proxy,
+    // /api/actuator/* is Spring-403'd) — the outage shape this fix removes.
+    it.each([
+      ["503 (backend down)", 503],
+      ["404 (path not served)", 404],
+      ["403 (path blocked)", 403],
+    ])("probe non-2xx %s → mobile gets 503", async (_label, status) => {
       const env = prodEnv({ "use.backend.check": "true" });
       const fetchMock = vi.fn(async (input: unknown) => {
-        const u = urlOf(input);
-        if (u.endsWith("/actuator/health/readiness"))
-          return new Response("down", { status: 503 });
+        if (isProbeCall(input))
+          return new Response("not ok", { status: status as number });
         return new Response("should not reach origin", { status: 200 });
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -450,14 +472,16 @@ describe("router", () => {
       const res = await worker.fetch(req, env, ctx);
       expect(res.status).toBe(503);
       expect(res.headers.get("X-Oglasino-Maintenance")).toBe("true");
+      // Blocked at the probe — the origin was never reached.
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        PROD_PROBE_URL,
+      ]);
     });
 
     it("probe throws → mobile gets 503", async () => {
       const env = prodEnv({ "use.backend.check": "true" });
       const fetchMock = vi.fn(async (input: unknown) => {
-        const u = urlOf(input);
-        if (u.endsWith("/actuator/health/readiness"))
-          throw new Error("network");
+        if (isProbeCall(input)) throw new Error("network");
         return new Response("should not reach origin", { status: 200 });
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -467,12 +491,10 @@ describe("router", () => {
       expect(res.headers.get("X-Oglasino-Maintenance")).toBe("true");
     });
 
-    it("both clear → mobile forwards to backend with /mobile stripped", async () => {
+    it("probe 200 → mobile forwards to backend with /mobile stripped", async () => {
       const env = prodEnv({ "use.backend.check": "true" });
       const fetchMock = vi.fn(async (input: unknown) => {
-        const u = urlOf(input);
-        if (u.endsWith("/actuator/health/readiness"))
-          return new Response("ok", { status: 200 });
+        if (isProbeCall(input)) return new Response("ok", { status: 200 });
         return new Response("from origin", { status: 200 });
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -482,12 +504,11 @@ describe("router", () => {
       const res = await worker.fetch(req, env, ctx);
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("from origin");
-      // Forwarded URL is /api/<rest> — no /mobile segment.
-      const forwarded = fetchMock.mock.calls
-        .map((c) => urlOf(c[0]))
-        .find((u) => u.startsWith("https://api-origin.oglasino.com/api/"));
-      expect(forwarded).toBe("https://api-origin.oglasino.com/api/v1/things?q=1");
-      expect(forwarded).not.toContain("/mobile");
+      // Probe first, then the forward to /api/<rest> — no /mobile segment.
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        PROD_PROBE_URL,
+        "https://api-origin.oglasino.com/api/v1/things?q=1",
+      ]);
     });
 
     it("no probe configured + both flags clear → mobile forwards stripped", async () => {
@@ -503,10 +524,21 @@ describe("router", () => {
         "https://api-origin.oglasino.com/api/v1/things"
       );
       // Probe not run when use.backend.check is unset.
-      const probed = fetchMock.mock.calls.some((c) =>
-        urlOf(c[0]).endsWith("/actuator/health/readiness")
+      expect(fetchMock.mock.calls.some((c) => isProbeCall(c[0]))).toBe(false);
+    });
+
+    it("use.backend.check=false → probe skipped, mobile forwards", async () => {
+      const env = prodEnv({ "use.backend.check": "false" });
+      const fetchMock = vi.fn(
+        async (_input: unknown) => new Response("from origin", { status: 200 })
       );
-      expect(probed).toBe(false);
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request("https://oglasino.com/api/mobile/v1/things");
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        "https://api-origin.oglasino.com/api/v1/things",
+      ]);
     });
 
     it("ignores maintenance.web.active — web down, backend up, probe ok → mobile FORWARDS", async () => {
@@ -516,9 +548,7 @@ describe("router", () => {
         "use.backend.check": "true",
       });
       const fetchMock = vi.fn(async (input: unknown) => {
-        const u = urlOf(input);
-        if (u.endsWith("/actuator/health/readiness"))
-          return new Response("ok", { status: 200 });
+        if (isProbeCall(input)) return new Response("ok", { status: 200 });
         return new Response("from origin", { status: 200 });
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -529,14 +559,10 @@ describe("router", () => {
       // BACKEND_ORIGIN, probe run) — not merely "not blocked" by some other path.
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("from origin");
-      const forwarded = fetchMock.mock.calls
-        .map((c) => urlOf(c[0]))
-        .find((u) => u.startsWith("https://api-origin.oglasino.com/api/"));
-      expect(forwarded).toBe("https://api-origin.oglasino.com/api/v1/things");
-      const probed = fetchMock.mock.calls.some((c) =>
-        urlOf(c[0]).endsWith("/actuator/health/readiness")
-      );
-      expect(probed).toBe(true);
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        PROD_PROBE_URL,
+        "https://api-origin.oglasino.com/api/v1/things",
+      ]);
     });
 
     it("ignores admin.bypass.disabled — full web lockdown, backend up → mobile FORWARDS", async () => {
@@ -556,12 +582,14 @@ describe("router", () => {
       );
     });
 
-    it("probe target is /actuator/health/readiness with edge cache opts", async () => {
+    // Pins the exact probe URL per env. The 2026-07-23 mobile outage was this
+    // URL pointing at a path the origin does not serve, so it is asserted
+    // literally — prefix/suffix matching is what let the wrong URL through.
+    it("probe URL is BACKEND_ORIGIN/api/public/health/check with edge cache opts (prod)", async () => {
       const env = prodEnv({ "use.backend.check": "true" });
       let probeInit: RequestInit | undefined;
       const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
-        const u = urlOf(input);
-        if (u.endsWith("/actuator/health/readiness")) {
+        if (isProbeCall(input)) {
           probeInit = init;
           return new Response("ok", { status: 200 });
         }
@@ -570,15 +598,30 @@ describe("router", () => {
       vi.stubGlobal("fetch", fetchMock);
       const req = new Request("https://oglasino.com/api/mobile/v1/things");
       await worker.fetch(req, env, ctx);
-      const probed = fetchMock.mock.calls
-        .map((c) => urlOf(c[0]))
-        .find((u) => u.includes("/actuator/health/readiness"));
-      expect(probed).toBe(
-        "https://api-origin.oglasino.com/actuator/health/readiness"
+      expect(urlOf(fetchMock.mock.calls[0][0])).toBe(PROD_PROBE_URL);
+      const cf = (probeInit as unknown as {
+        cf?: { cacheTtl?: number; cacheEverything?: boolean };
+      })?.cf;
+      expect(cf?.cacheTtl).toBe(30);
+      expect(cf?.cacheEverything).toBe(true);
+    });
+
+    it("probe URL follows BACKEND_ORIGIN per env (stage)", async () => {
+      const env = stageEnv({ "use.backend.check": "true" });
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (isProbeCall(input)) return new Response("ok", { status: 200 });
+        return new Response("from origin", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const req = new Request(
+        "https://api-stage.oglasino.com/api/mobile/v1/things"
       );
-      expect(
-        (probeInit as unknown as { cf?: { cacheTtl?: number } })?.cf?.cacheTtl
-      ).toBe(30);
+      const res = await worker.fetch(req, env, ctx);
+      expect(res.status).toBe(200);
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        STAGE_PROBE_URL,
+        "https://api-origin-stage.oglasino.com/api/v1/things",
+      ]);
     });
 
     it("backend.active true short-circuits the probe (no probe call)", async () => {
@@ -592,10 +635,45 @@ describe("router", () => {
       vi.stubGlobal("fetch", fetchMock);
       const req = new Request("https://oglasino.com/api/mobile/v1/things");
       await worker.fetch(req, env, ctx);
-      const probed = fetchMock.mock.calls.some((c) =>
-        urlOf(c[0]).endsWith("/actuator/health/readiness")
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("probe outcome does not gate web — failing probe, web still forwards", async () => {
+      const env = prodEnv({ "use.backend.check": "true" });
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (isProbeCall(input)) return new Response("down", { status: 503 });
+        return new Response("from vercel", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const res = await worker.fetch(
+        new Request("https://oglasino.com/rs-sr/catalog"),
+        env,
+        ctx
       );
-      expect(probed).toBe(false);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("from vercel");
+      // Web never probes at all — the probe is mobile-only.
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        "https://oglasino-web-prod.vercel.app/rs-sr/catalog",
+      ]);
+    });
+
+    it("probe outcome does not gate non-mobile API traffic either", async () => {
+      const env = prodEnv({ "use.backend.check": "true" });
+      const fetchMock = vi.fn(async (input: unknown) => {
+        if (isProbeCall(input)) return new Response("down", { status: 503 });
+        return new Response("from origin", { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const res = await worker.fetch(
+        new Request("https://api.oglasino.com/api/v1/things"),
+        env,
+        ctx
+      );
+      expect(res.status).toBe(200);
+      expect(fetchMock.mock.calls.map((c) => urlOf(c[0]))).toEqual([
+        "https://api-origin.oglasino.com/api/v1/things",
+      ]);
     });
 
     it("mobile traffic on the API host also strips /mobile and forwards", async () => {

@@ -74,11 +74,28 @@ The Worker caches each KV value at edge for 30s, so changes take up to
 npx wrangler kv key put --env stage --binding CONFIG use.backend.check true
 ```
 
-When enabled, the Worker probes `${BACKEND_ORIGIN}/actuator/health/readiness`
+When enabled, the Worker probes `${BACKEND_ORIGIN}/api/public/health/check`
 (30s edge cache) before forwarding **mobile** (`/api/mobile/*`) requests only.
 If the probe fails (non-2xx or throw), that mobile request gets the maintenance
 response automatically. The probe never gates web traffic. Useful during
 planned droplet outages.
+
+The probe target is the same public health endpoint the mobile boot gate calls,
+so the probe and the client agree on "backend reachable". It is a **shallow**
+liveness check — app up, dependencies (Postgres / Redis / Elasticsearch)
+unknown. A backend that is running but has lost a dependency will pass the probe
+and mobile traffic will be forwarded to it.
+
+> **Before flipping this flag on, verify the probe target answers 200 from the
+> origin.** On 2026-07-23 the probe pointed at `/actuator/health/readiness`,
+> which the origin does not serve to outside callers (bare `/actuator/*` → 404
+> at the proxy; `/api/actuator/*` → Spring 403). Every probe failed, so every
+> mobile request got a 503 while web stayed healthy. Recovery is flipping this
+> flag back to `false`:
+>
+> ```bash
+> npx wrangler kv key put --env production --binding CONFIG use.backend.check false
+> ```
 
 ## Debugging
 

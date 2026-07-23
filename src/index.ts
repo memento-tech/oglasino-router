@@ -32,10 +32,17 @@
 //        and forward to BACKEND_ORIGIN; the backend never sees /mobile.
 //
 // Backend liveness probe (gated by use.backend.check; mobile path only):
-//   GETs BACKEND_ORIGIN/actuator/health/readiness with
+//   GETs BACKEND_ORIGIN/api/public/health/check with
 //   { cf: { cacheTtl: 30, cacheEverything: true } }. The edge cache bounds
 //   backend probe load to ~once per TTL per edge location regardless of how
 //   many mobile clients hit the worker. A non-2xx or thrown probe → probeFailed.
+//   The target is the same public health endpoint the mobile boot gate calls,
+//   so the probe and the client agree on "backend reachable". It is a shallow
+//   liveness check: app up, dependencies (db/redis/es) unknown. The former
+//   target — /actuator/health/readiness — was dependency-aware but is not
+//   served to outside callers (bare /actuator/* 404s at the proxy, /api/actuator/*
+//   is 403-blocked), so it made every probe fail and 503'd all mobile traffic
+//   whenever use.backend.check was on.
 //
 // Fail-open: if any CONFIG.get throws, all four flags fall back to false
 //   (= everything up). Better to serve traffic than to lock everyone out on a
@@ -69,6 +76,11 @@ const MAINTENANCE_JSON = JSON.stringify({
 });
 
 const NOINDEX_HEADER = "noindex, nofollow, noarchive, nosnippet";
+
+// Backend liveness probe target, appended to BACKEND_ORIGIN (see the probe note
+// at the top of this file). Same path on every env — the origin differs, the
+// endpoint does not.
+const BACKEND_PROBE_PATH = "/api/public/health/check";
 
 // .well-known app-association files, served directly by the worker (see the
 // maintenance-matrix note above). Tier-correct: prod uses the com.oglasino
@@ -243,7 +255,7 @@ export default {
       if (!backendDown && useBackendCheck) {
         try {
           const probe = await fetch(
-            `${env.BACKEND_ORIGIN}/actuator/health/readiness`,
+            `${env.BACKEND_ORIGIN}${BACKEND_PROBE_PATH}`,
             { cf: { cacheTtl: 30, cacheEverything: true } }
           );
           if (!probe.ok) backendDown = true;
