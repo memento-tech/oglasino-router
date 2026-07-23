@@ -57,8 +57,11 @@ absent/null = `false` = up.
 - Otherwise strip `/mobile` (`/api/mobile/<rest>` → `/api/<rest>`) and forward to the backend.
 
 The probe (gated by `use.backend.check`, mobile only) GETs
-`BACKEND_ORIGIN/actuator/health/readiness` with a 30s edge cache; a non-2xx or thrown probe
-sets `probeFailed`.
+`BACKEND_ORIGIN/api/public/health/check` with a 30s edge cache; a non-2xx or thrown probe
+sets `probeFailed`. The target must be a path the origin actually serves to outside callers —
+it is a shallow liveness check (app up, dependencies unknown). See
+[`docs/operations.md`](docs/operations.md) for the 2026-07-23 outage this caused when it was
+not.
 
 > **Care areas** (deliberate, easy to break): the maintenance matrix, fail-open on KV errors,
 > the locale-prefixed admin-request regex `/^\/[a-z]{2}-[a-z]{2}\/admin(\/|$)/i`, the forced
